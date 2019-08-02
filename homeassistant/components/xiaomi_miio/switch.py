@@ -35,6 +35,8 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
          'chuangmi.plug.v3',
          'chuangmi.plug.hmi205',
          'lumi.acpartner.v3',
+         'pwzn.relay.apple',
+         'pwzn.relay.banana',
          ]),
 })
 
@@ -156,6 +158,20 @@ async def async_setup_platform(hass, config, async_add_entities,
                                                       unique_id)
         devices.append(device)
         hass.data[DATA_KEY][host] = device
+    elif model in ['pwzn.relay.apple', 'pwzn.relay.banana']:
+        from miio import PwznRelay
+        sub_devs = []
+        plug = PwznRelay(host, token)
+        master_dev = PwznRelaySwitch(name, plug, model, unique_id)
+        async_add_entities([master_dev], update_before_add=True)
+        for num in range(0, 16):
+            sub_dev = PwznRelaySubSwitch("{} {}".format(name, num), plug,
+                                         model, "{}-{}".format(unique_id, num),
+                                         master_dev, num)
+            master_dev.add_sub_switch(sub_dev)
+            sub_devs.append(sub_dev)
+        async_add_entities(sub_devs)
+        hass.data[DATA_KEY][host] = master_dev
     else:
         _LOGGER.error(
             'Unsupported device found! Please create an issue at '
@@ -532,3 +548,185 @@ class XiaomiAirConditioningCompanionSwitch(XiaomiPlugGenericSwitch):
         except DeviceException as ex:
             self._available = False
             _LOGGER.error("Got exception while fetching the state: %s", ex)
+
+
+class PwznRelaySwitch(XiaomiPlugGenericSwitch):
+    """Representation of a PWZN relay."""
+
+    def __init__(self, name, plug, model, unique_id):
+        """Initialize the PWZN relay."""
+        super().__init__(name, plug, model, unique_id)
+        self._raw_state = None
+        self._sub_switches = []
+        self._state_attrs = {
+            ATTR_MODEL: self._model,
+        }
+
+    @property
+    def hidden(self) -> bool:
+        """Return True if the entity should be hidden from UIs."""
+        return True
+
+    async def async_turn_on(self, **kwargs):
+        """Master PWZN relay do not support turn on. Set in sub device."""
+        return self.hass.async_add_job(
+            ft.partial(self.turn_on, **kwargs))
+
+    async def async_turn_off(self, **kwargs):
+        """Master PWZN relay do not support turn off. Set in sub device."""
+        return self.hass.async_add_job(
+            ft.partial(self.turn_off, **kwargs))
+
+    async def async_update(self):
+        """Fetch state from the device."""
+        from miio import DeviceException
+
+        try:
+            state = await self.hass.async_add_executor_job(self._plug.status)
+            _LOGGER.debug("Got new state: %s", state)
+
+            self._available = True
+            self._raw_state = state
+            for sub in self._sub_switches:
+                sub.async_schedule_update_ha_state(force_refresh=True)
+
+        except DeviceException as ex:
+            self._available = False
+            _LOGGER.error("Got exception while fetching the state: %s", ex)
+
+    async def get_sub_switch_state(self, number):
+        """Read sub relay state."""
+        if self._raw_state is None:
+            await self.async_update()
+        if self._raw_state:
+            if number == 0:
+                return self._raw_state.relay0
+            elif number == 1:
+                return self._raw_state.relay1
+            elif number == 2:
+                return self._raw_state.relay2
+            elif number == 3:
+                return self._raw_state.relay3
+            elif number == 4:
+                return self._raw_state.relay4
+            elif number == 5:
+                return self._raw_state.relay5
+            elif number == 6:
+                return self._raw_state.relay6
+            elif number == 7:
+                return self._raw_state.relay7
+            elif number == 8:
+                return self._raw_state.relay8
+            elif number == 9:
+                return self._raw_state.relay9
+            elif number == 10:
+                return self._raw_state.relay10
+            elif number == 11:
+                return self._raw_state.relay11
+            elif number == 12:
+                return self._raw_state.relay12
+            elif number == 13:
+                return self._raw_state.relay13
+            elif number == 14:
+                return self._raw_state.relay14
+            elif number == 15:
+                return self._raw_state.relay15
+
+    async def get_sub_switch_name(self, number):
+        """Read sub relay name."""
+        if self._raw_state is None:
+            await self.async_update()
+        if self._raw_state:
+            if number == 0:
+                return self._raw_state.name0
+            elif number == 1:
+                return self._raw_state.name1
+            elif number == 2:
+                return self._raw_state.name2
+            elif number == 3:
+                return self._raw_state.name3
+            elif number == 4:
+                return self._raw_state.name4
+            elif number == 5:
+                return self._raw_state.name5
+            elif number == 6:
+                return self._raw_state.name6
+            elif number == 7:
+                return self._raw_state.name7
+            elif number == 8:
+                return self._raw_state.name8
+            elif number == 9:
+                return self._raw_state.name9
+            elif number == 10:
+                return self._raw_state.name10
+            elif number == 11:
+                return self._raw_state.name11
+            elif number == 12:
+                return self._raw_state.name12
+            elif number == 13:
+                return self._raw_state.name13
+            elif number == 14:
+                return self._raw_state.name14
+            elif number == 15:
+                return self._raw_state.name15
+
+    def add_sub_switch(self, sub):
+        """Attach sub relay to master device."""
+        self._sub_switches.append(sub)
+
+
+class PwznRelaySubSwitch(XiaomiPlugGenericSwitch):
+    """Representation of a PWZN sub relay."""
+
+    def __init__(self, name, plug, model, unique_id, parent, number):
+        """Initialize the PWZN sub relay."""
+        super().__init__(name, plug, model, unique_id)
+        self._number = number
+        self._parent = parent
+        self._name = name
+        self._state_attrs = {
+            ATTR_MODEL: "{}-{}".format(self._model, self._number),
+        }
+
+    @property
+    def should_poll(self):
+        """Poll the plug."""
+        return False
+
+    async def async_turn_on(self, **kwargs):
+        """Turn the relay on."""
+        result = await self._try_command(
+            "Turning the all relay on failed.",
+            self._plug.relay_on, self._number)
+
+        if result:
+            self._state = True
+            self._skip_update = True
+            self.async_schedule_update_ha_state(force_refresh=True)
+
+    async def async_turn_off(self, **kwargs):
+        """Turn the relay off."""
+        result = await self._try_command(
+            "Turning the allrelay off failed.",
+            self._plug.relay_off, self._number)
+
+        if result:
+            self._state = False
+            self._skip_update = True
+            self.async_schedule_update_ha_state(force_refresh=True)
+
+    async def async_update(self):
+        """Fetch state from the device."""
+        # On state change the device doesn't provide the new state immediately.
+        if self._skip_update:
+            self._skip_update = False
+            return
+
+        state = await self._parent.get_sub_switch_state(self._number)
+        name = await self._parent.get_sub_switch_name(self._number)
+        _LOGGER.debug("Sub relay %s got new state: %s, name: %s", self._number, state, name)
+
+        self._available = True
+        self._state = state
+        if name:
+            self._name = name
