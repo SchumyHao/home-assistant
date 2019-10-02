@@ -306,8 +306,8 @@ class AbstractFhwisePlayer(MediaPlayerDevice):
             return
 
         try:
-            play_state = await self.hass.async_add_executor_job(
-                self._player.player.get_play_status
+            play_state = await self._try_command(
+                "Get play status failed.", self._player.get_play_status
             )
             _LOGGER.debug(f"Got new state: {play_state}")
             if play_state == 1:
@@ -315,8 +315,8 @@ class AbstractFhwisePlayer(MediaPlayerDevice):
             else:
                 self._player_state = STATE_PAUSED
 
-            vol_level = await self.hass.async_add_executor_job(
-                self._player.player.get_volume_level
+            vol_level = await self._try_command(
+                "Get volume level failed", self._player.get_volume_level
             )
             _LOGGER.debug(f"Got new vol level: {vol_level}")
             self._volume_level = vol_level
@@ -329,7 +329,8 @@ class AbstractFhwisePlayer(MediaPlayerDevice):
 
         except Exception:
             self._available = False
-            _LOGGER.error("Got exception while fetching the state")
+            _LOGGER.error(f"Got exception while fetching the state")
+            traceback.print_exc()  # noqa
 
 
 '''
@@ -371,9 +372,9 @@ class FhwiseMusicPlayer(AbstractFhwisePlayer):
         ),
     ]
 
-    def __init__(self, host, port, model, name):
+    def __init__(self, player, host, port, model, name):
         """Initialize the fhwise music player device."""
-        super().__init__(host, port, model, name)
+        super().__init__(player, host, port, model, name)
         self._cur_track = 0
 
 
