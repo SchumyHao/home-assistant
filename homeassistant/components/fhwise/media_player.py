@@ -77,13 +77,13 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
         _LOGGER.info(f"{model} detected")
         fhPlayerDevice = FhwiseMusicPlayerDevice(fhPlayer, host, port, model)
         await fhPlayerDevice.async_update()
-        _LOGGER.info(f"{model} sync done")
         async_track_time_interval(
             hass, fhPlayerDevice.async_update, timedelta(seconds=5)
         )
 
+        devices.append(FhwiseMusicPlayer(fhPlayerDevice, name))
         for i in range(fhPlayerDevice.supported_area_num):
-            devices.append(FhwiseMusicPlayer(fhPlayerDevice, name, i))
+            devices.append(FhwiseMusicPlayer(fhPlayerDevice, name, i + 1))
     except Exception:
         raise PlatformNotReady
 
@@ -196,7 +196,7 @@ class FhwiseMusicPlayerDevice:
         """Docstring."""
         if self._model in SUPPORT_4_AREA_MODELS:
             return 4
-        return 1
+        return 0
 
     @property
     def unique_id(self):
@@ -327,26 +327,42 @@ class FhwiseMusicPlayerDevice:
 
     async def async_set_volume_level(self, volume, area_id):
         """Set the volume level, range 0..1."""
-        # volume_level = int(volume / 0.0625)
-        result = await self._try_command(
-            "Set sub area failed.",
-            self._player.set_sub_area_control,
-            int(area_id),
-            int(volume),
-            self._area_state[area_id]["state"],
-        )
-        if volume != 0 and int(result.split("::")[1]) == 0:
-            # Maybe muted, un-mute and set again
-            _LOGGER.debug("Call set volume but resule still 0. Try un-mute.")
-            await self.async_mute_volume(False)
-            await self._try_command(
+        if area_id == "0":
+            result = await self._try_command(
+                "Set volume level failed.", self._player.set_volume_level, int(volume)
+            )
+            _LOGGER.debug(result)
+            if volume != 0 and result == 0:
+                # Maybe muted, un-mute and set again
+                _LOGGER.debug("Call set volume but resule still 0. Try un-mute.")
+                await self.async_mute_volume(False)
+                await self._try_command(
+                    "Set volume level failed.",
+                    self._player.set_volume_level,
+                    int(volume),
+                )
+            self._area_state[area_id]["volume"] = int(volume)
+        else:
+            result = await self._try_command(
                 "Set sub area failed.",
                 self._player.set_sub_area_control,
-                int(area_id),
+                int(area_id) - 1,
                 int(volume),
                 self._area_state[area_id]["state"],
             )
-        self._area_state[area_id]["volume"] = int(volume)
+            _LOGGER.debug(result)
+            if volume != 0 and int(result.split("::")[1]) == 0:
+                # Maybe muted, un-mute and set again
+                _LOGGER.debug("Call set volume but resule still 0. Try un-mute.")
+                await self.async_mute_volume(False)
+                await self._try_command(
+                    "Set sub area failed.",
+                    self._player.set_sub_area_control,
+                    int(area_id) - 1,
+                    int(volume),
+                    self._area_state[area_id]["state"],
+                )
+            self._area_state[area_id]["volume"] = int(volume)
 
     async def async_media_play_pause(self):
         """Send play command."""
@@ -360,29 +376,33 @@ class FhwiseMusicPlayerDevice:
 
     async def async_media_on_off(self, area_id):
         """Send on/off command."""
-        if not self.supported_area:
+        if area_id == "0":
             _LOGGER.info(f"{self._model} dose not support area, can not turn off.")
             return await self.async_media_play_pause()
-        await self._try_command(
-            "Set sub area failed.",
-            self._player.set_sub_area_control,
-            int(area_id),
-            self._area_state[area_id]["volume"],
-            not self._area_state[area_id]["state"],
-        )
-        self._area_state[area_id]["state"] = not self._area_state[area_id]["state"]
+        else:
+            await self._try_command(
+                "Set sub area failed.",
+                self._player.set_sub_area_control,
+                int(area_id) - 1,
+                self._area_state[area_id]["volume"],
+                not self._area_state[area_id]["state"],
+            )
+            self._area_state[area_id]["state"] = not self._area_state[area_id]["state"]
 
     async def async_media_set_track(self, track_id):
         """Send previous track command."""
         await self._try_command(
             "Set track failed.", self._player.set_current_list_play_file, track_id
         )
+        self._cur_track = track_id
 
     async def async_media_seek(self, position):
         """Send seek command."""
         await self._try_command(
             "Set seek failed.", self._player.set_current_file_position, position * 1000
         )
+        self._cur_track_pos = position * 1000
+        self._media_position_updated_at = dt_util.utcnow()
 
     async def async_select_sound_mode(self, sound_mode):
         """Select sound mode."""
@@ -390,7 +410,7 @@ class FhwiseMusicPlayerDevice:
             _LOGGER.error(f"{sound_mode} is not support.")
             return
 
-        if sound_mode != SOUND_MODE_OFF:
+        if sound_mode == SOUND_MODE_OFF:
             await self._try_command(
                 "Turn off EQ switch failed.", self._player.set_eq_switch, 0
             )
@@ -432,6 +452,12 @@ class FhwiseMusicPlayerDevice:
                 self._cur_area_name = room_info[0]
                 self._cur_area_id = room_info[1]
 
+            volume_level = await self._try_command(
+                "Get volume level failed", self._player.get_volume_level
+            )
+            _LOGGER.debug(f"Got new vol level: {volume_level}")
+            self._area_state["0"] = {"volume": int(volume_level), "state": True}
+
             if self.supported_area:
                 for i in range(self.supported_area_num):
                     area_info = (
@@ -442,16 +468,10 @@ class FhwiseMusicPlayerDevice:
                         )
                     ).split("::")
                     _LOGGER.debug(f"Got area info: {area_info}")
-                    self._area_state[area_info[0]] = {
+                    self._area_state[f"{int(area_info[0])+1}"] = {
                         "volume": int(area_info[1]),
                         "state": area_info[2] != "0",
                     }
-            else:
-                volume_level = await self._try_command(
-                    "Get volume level failed", self._player.get_volume_level
-                )
-                _LOGGER.debug(f"Got new vol level: {volume_level}")
-                self._area_state["0"] = {"volume": int(volume_level), "state": True}
 
             play_state = await self._try_command(
                 "Get play status failed.", self._player.get_play_status
@@ -547,14 +567,21 @@ class FhwiseMusicPlayer(MediaPlayerDevice):
 
     tracks = []
 
-    def __init__(self, player_dev, name, area=1):
+    def __init__(self, player_dev, name, area=0):
         """Initialize the demo device."""
         self._player_dev = player_dev
         self._area = f"{area}"
-        self._name = f"{name} {area}"
-        self._unique_id = f"{self._player_dev.unique_id}-{area}"
-
-        self._state_attrs = {ATTR_MODEL: self._player_dev.model, ATTR_AREA: self._area}
+        if area:
+            self._name = f"{name} {area}"
+            self._unique_id = f"{self._player_dev.unique_id}-{area}"
+            self._state_attrs = {
+                ATTR_MODEL: self._player_dev.model,
+                ATTR_AREA: self._area,
+            }
+        else:
+            self._name = f"{name}"
+            self._unique_id = f"{self._player_dev.unique_id}"
+            self._state_attrs = {ATTR_MODEL: self._player_dev.model}
 
     @property
     def supported_features(self):
@@ -601,7 +628,7 @@ class FhwiseMusicPlayer(MediaPlayerDevice):
     @property
     def volume_level(self):
         """Return the volume level of the media player (0..1)."""
-        return self._player_dev.area_state[self._area]["volume"] * 0.0625
+        return self._player_dev.area_state[self._area]["volume"] * 0.0666
 
     @property
     def is_volume_muted(self):
@@ -692,13 +719,13 @@ class FhwiseMusicPlayer(MediaPlayerDevice):
     async def async_volume_down(self):
         """Decrease volume."""
         volume = self._player_dev.area_state[self._area]["volume"]
-        volume = max(0, self._volume_level - 1)
+        volume = max(0, volume - 1)
         await self._player_dev.async_set_volume_level(volume, self._area)
         self.schedule_update_ha_state()
 
     async def async_set_volume_level(self, volume):
         """Set the volume level, range 0..1."""
-        volume_level = int(volume / 0.0625)
+        volume_level = int(volume / 0.0666)
         await self._player_dev.async_set_volume_level(volume_level, self._area)
         self.schedule_update_ha_state()
 

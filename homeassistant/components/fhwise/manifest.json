@@ -3,7 +3,7 @@
     "name": "fhwise",
     "documentation": "https://www.home-assistant.io/components/xiaomi_miio",
     "requirements": [
-      "py-fhwise==0.0.1"
+      "py-fhwise==0.0.2"
     ],
     "dependencies": [],
     "codeowners": [
